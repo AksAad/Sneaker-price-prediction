@@ -5,3 +5,14 @@ pandas
 numpy
 scikit-learn
 matplotlib
+seaborn
+plotly
+wordcloud
+shap
+lime
+streamlit
+fastapi
+uvicorn
+jupyter
+ipykernel
+kaleido

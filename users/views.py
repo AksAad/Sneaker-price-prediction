@@ -78,7 +78,7 @@ def UserHome(request):
 def DatasetView(request):
     path = settings.MEDIA_ROOT + "//" + 'Clean_Shoe_Data.csv'
     df = pd.read_csv(path, nrows=100)
-    df = df.to_html
+    df = df.to_html()
     return render(request, 'users/viewdataset.html', {'data': df})
 
 def machinelearning(request):
@@ -117,7 +117,7 @@ def machinelearning(request):
     X_train, X_valid, y_train, y_valid = train_test_split(X, y, test_size=0.2)
     object_cols = ['Sneaker_Name', 'Buyer', 'Brand']
     # Apply one-hot encoder to each column with categorical data
-    OH_encoder = OneHotEncoder(handle_unknown='ignore', sparse=False)
+    OH_encoder = OneHotEncoder(handle_unknown='ignore', sparse_output=False)
     OH_cols_train = pd.DataFrame(OH_encoder.fit_transform(X_train[object_cols]))
     OH_cols_valid = pd.DataFrame(OH_encoder.transform(X_valid[object_cols]))
 
@@ -197,7 +197,7 @@ def prediction(request):
         X_train, X_valid, y_train, y_valid = train_test_split(X, y, test_size=0.2)
         object_cols = ['Sneaker_Name', 'Buyer', 'Brand']
         # Apply one-hot encoder to each column with categorical data
-        OH_encoder = OneHotEncoder(handle_unknown='ignore', sparse=False)
+        OH_encoder = OneHotEncoder(handle_unknown='ignore', sparse_output=False)
         OH_cols_train = pd.DataFrame(OH_encoder.fit_transform(X_train[object_cols]))
         OH_cols_valid = pd.DataFrame(OH_encoder.transform(X_valid[object_cols]))
 
@@ -277,3 +277,4 @@ def prediction(request):
 
 
     
+
