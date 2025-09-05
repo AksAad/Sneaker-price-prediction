@@ -1,5 +1,18 @@
 from django.db import models
 
+import numpy as np
+import pandas as pd
+from sklearn.linear_model import LinearRegression
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.svm import SVR
+from sklearn.model_selection import train_test_split, GridSearchCV
+from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
+from sklearn.preprocessing import StandardScaler
+import xgboost as xgb
+import joblib
+import warnings
+warnings.filterwarnings('ignore')
+
 # Create your models here.
 class UserRegistrationModel(models.Model):
     name = models.CharField(max_length=100)
@@ -18,19 +31,6 @@ class UserRegistrationModel(models.Model):
 
     class Meta:
         db_table = 'UserRegistrations'
-
-import numpy as np
-import pandas as pd
-from sklearn.linear_model import LinearRegression
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.svm import SVR
-from sklearn.model_selection import train_test_split, GridSearchCV
-from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
-from sklearn.preprocessing import StandardScaler
-import xgboost as xgb
-import joblib
-import warnings
-warnings.filterwarnings('ignore')
 
 class BaseModel:
     """Base class for all models"""
