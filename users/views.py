@@ -1,23 +1,29 @@
-from ast import alias
-from concurrent.futures import process
+import os
+import json
+import pandas as pd
+import numpy as np
+import datetime as dt
+import io
+import base64
+from pathlib import Path
+
+# Django imports
 from django.shortcuts import render, redirect
 from django.http import JsonResponse, HttpResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 from django.contrib import messages
 from django.conf import settings
-import json
-import pandas as pd
-import numpy as np
+
+# Machine Learning imports
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.preprocessing import OneHotEncoder
 from sklearn.linear_model import LinearRegression
 from sklearn import preprocessing, metrics
 from sklearn.metrics import classification_report
-import datetime as dt
-import io
-import base64
+
+# Plotting imports
 import matplotlib
 matplotlib.use('Agg')  # Use non-interactive backend
 import matplotlib.pyplot as plt
@@ -40,6 +46,144 @@ except ImportError:
     ADVANCED_MODELS_AVAILABLE = False
     print("Advanced models not available, using basic implementation")
 
+
+class MLPipelineManager:
+    """Centralized ML pipeline to avoid code duplication"""
+    
+    def __init__(self):
+        self.encoder = None
+        self.model = None
+        self.feature_names = None
+        self.is_fitted = False
+    
+    def load_and_preprocess_data(self, file_path):
+        """Load and preprocess the sneaker data"""
+        try:
+            # Use pathlib for cross-platform path handling
+            path = Path(settings.MEDIA_ROOT) / "Clean_Shoe_Data.csv"
+            
+            if not path.exists():
+                raise FileNotFoundError(f"Dataset not found at {path}")
+            
+            # Load data
+            df = pd.read_csv(path, parse_dates=True)
+            
+            # Rename columns to remove spaces
+            df = df.rename(columns={
+                "Order Date": "Order_date",
+                "Sneaker Name": "Sneaker_Name", 
+                "Sale Price": "Sale_Price",
+                "Retail Price": "Retail_Price",
+                "Release Date": "Release_Date",
+                "Shoe Size": "Shoe_Size",
+                "Buyer Region": "Buyer"
+            })
+            
+            # Convert dates to ordinal
+            df['Order_date'] = pd.to_datetime(df['Order_date'], errors='coerce')
+            df['Order_date'] = df['Order_date'].map(dt.datetime.toordinal)
+            
+            df['Release_Date'] = pd.to_datetime(df['Release_Date'], errors='coerce')
+            df['Release_Date'] = df['Release_Date'].map(dt.datetime.toordinal)
+            
+            # Handle missing values
+            df = df.dropna()
+            
+            return df
+            
+        except Exception as e:
+            print(f"Error loading data: {str(e)}")
+            return None
+    
+    def prepare_features(self, df, is_training=True):
+        """Prepare features with one-hot encoding"""
+        try:
+            # Separate features and target
+            X = df.drop(['Sale_Price'], axis=1)
+            y = df['Sale_Price'] if 'Sale_Price' in df.columns else None
+            
+            # Categorical columns
+            categorical_cols = ['Sneaker_Name', 'Buyer', 'Brand']
+            
+            if is_training:
+                # Fit encoder on training data
+                self.encoder = OneHotEncoder(handle_unknown='ignore', sparse_output=False)
+                encoded_features = self.encoder.fit_transform(X[categorical_cols])
+                
+                # Get feature names
+                feature_names = self.encoder.get_feature_names_out(categorical_cols)
+                encoded_df = pd.DataFrame(encoded_features, columns=feature_names, index=X.index)
+                
+                # Combine with numerical features
+                numerical_features = X.drop(categorical_cols, axis=1)
+                X_processed = pd.concat([numerical_features, encoded_df], axis=1)
+                
+                self.feature_names = X_processed.columns.tolist()
+                
+            else:
+                # Transform using fitted encoder
+                if self.encoder is None:
+                    raise ValueError("Encoder not fitted. Please train the model first.")
+                
+                encoded_features = self.encoder.transform(X[categorical_cols])
+                feature_names = self.encoder.get_feature_names_out(categorical_cols)
+                encoded_df = pd.DataFrame(encoded_features, columns=feature_names, index=X.index)
+                
+                # Combine with numerical features
+                numerical_features = X.drop(categorical_cols, axis=1)
+                X_processed = pd.concat([numerical_features, encoded_df], axis=1)
+                
+                # Ensure all training columns are present
+                for col in self.feature_names:
+                    if col not in X_processed.columns:
+                        X_processed[col] = 0
+                
+                # Reorder columns to match training data
+                X_processed = X_processed[self.feature_names]
+            
+            return X_processed, y
+            
+        except Exception as e:
+            print(f"Error preparing features: {str(e)}")
+            return None, None
+    
+    def train_model(self, X, y):
+        """Train the Random Forest model"""
+        try:
+            self.model = RandomForestRegressor(n_estimators=100, random_state=42)
+            self.model.fit(X, y)
+            self.is_fitted = True
+            return True
+        except Exception as e:
+            print(f"Error training model: {str(e)}")
+            return False
+    
+    def predict(self, X):
+        """Make predictions"""
+        if not self.is_fitted or self.model is None:
+            raise ValueError("Model not trained. Please train the model first.")
+        
+        return self.model.predict(X)
+    
+    def evaluate(self, X, y):
+        """Evaluate model performance"""
+        if not self.is_fitted:
+            return None
+        
+        predictions = self.predict(X)
+        
+        return {
+            'MAE': metrics.mean_absolute_error(y, predictions),
+            'MSE': metrics.mean_squared_error(y, predictions), 
+            'RMSE': np.sqrt(metrics.mean_squared_error(y, predictions)),
+            'R2': metrics.r2_score(y, predictions)
+        }
+
+
+# Global ML pipeline instance
+ml_pipeline = MLPipelineManager()
+
+
 def UserRegisterActions(request):
     """User registration view"""
     if request.method == 'POST':
@@ -51,42 +195,45 @@ def UserRegisterActions(request):
             form = UserRegistrationForm()
             return render(request, 'UserRegistrations.html', {'form': form})
         else:
-            messages.success(request, 'Email or Mobile Already Existed')
+            messages.error(request, 'Email or Mobile Already Existed')
             print("Invalid form")
     else:
         form = UserRegistrationForm()
     return render(request, 'UserRegistrations.html', {'form': form})
+
 
 def UserLoginCheck(request):
     """User login check with session management"""
     if request.method == "POST":
         loginid = request.POST.get('loginid')
         pswd = request.POST.get('pswd')
-        print("Login ID = ", loginid, ' Password = ', pswd)
+        print("Login ID =", loginid, 'Password =', pswd)
+        
         try:
-            check = UserRegistrationModel.objects.get(
-                loginid=loginid, password=pswd)
-            status = check.status
-            print('Status is = ', status)
-            if status == "activated":
-                request.session['id'] = check.id
-                request.session['loggeduser'] = check.name
+            user = UserRegistrationModel.objects.get(loginid=loginid, password=pswd)
+            if user.status == "activated":
+                request.session['id'] = user.id
+                request.session['loggeduser'] = user.name
                 request.session['loginid'] = loginid
-                request.session['email'] = check.email
-                print("User id At", check.id, status)
+                request.session['email'] = user.email
+                print("User id:", user.id, user.status)
                 return render(request, 'users/UserHomePage.html', {})
             else:
-                messages.success(request, 'Your Account Not at activated')
+                messages.error(request, 'Your Account is not activated')
                 return render(request, 'UserLogin.html')
+        except UserRegistrationModel.DoesNotExist:
+            messages.error(request, 'Invalid Login ID and password')
         except Exception as e:
-            print('Exception is ', str(e))
-            pass
-        messages.success(request, 'Invalid Login id and password')
+            print('Exception:', str(e))
+            messages.error(request, 'An error occurred during login')
+    
     return render(request, 'UserLogin.html', {})
+
 
 def UserHome(request):
     """User home page"""
     return render(request, 'users/UserHomePage.html', {})
+
 
 def home(request):
     """Home page view"""
@@ -97,6 +244,7 @@ def home(request):
     }
     return render(request, 'sneaker_prediction/home.html', context)
 
+
 def model_comparison(request):
     """Model comparison page"""
     context = {
@@ -105,211 +253,114 @@ def model_comparison(request):
     }
     return render(request, 'sneaker_prediction/model_comparison.html', context)
 
+
 def DatasetView(request):
     """View dataset with error handling"""
     try:
-        path = settings.MEDIA_ROOT + "//" + 'Clean_Shoe_Data.csv'
+        path = Path(settings.MEDIA_ROOT) / "Clean_Shoe_Data.csv"
         df = pd.read_csv(path, nrows=100)
-        df = df.to_html()
-        return render(request, 'users/viewdataset.html', {'data': df})
+        df_html = df.to_html(classes='table table-striped', table_id='dataset-table')
+        return render(request, 'users/viewdataset.html', {'data': df_html})
     except Exception as e:
-        return render(request, 'users/viewdataset.html', {'data': f'Error loading data: {str(e)}'})
+        error_msg = f'Error loading data: {str(e)}'
+        return render(request, 'users/viewdataset.html', {'data': error_msg})
+
 
 def machinelearning(request):
-    """Machine learning analysis - original implementation"""
+    """Machine learning analysis using centralized pipeline"""
     try:
-        # Reading in the data
-        path = settings.MEDIA_ROOT + "\\" + "Clean_Shoe_Data.csv"
+        # Load and preprocess data
+        df = ml_pipeline.load_and_preprocess_data(None)
+        if df is None:
+            return render(request, "users/ml.html", {"error": "Failed to load dataset"})
         
-        shoe_data = pd.read_csv(path, parse_dates=True)
-        df = shoe_data.copy()
+        # Prepare features
+        X, y = ml_pipeline.prepare_features(df, is_training=True)
+        if X is None:
+            return render(request, "users/ml.html", {"error": "Failed to prepare features"})
         
-        # Checking for missing values in the dataset
-        nulls = pd.concat([df.isnull().sum()], axis=1)
-        nulls[nulls.sum(axis=1) > 0]
+        # Split data
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
         
-        # Renaming columns to get rid of spaces 
-        df = df.rename(columns={
-            "Order Date": "Order_date",
-            "Sneaker Name": "Sneaker_Name",
-            "Sale Price": "Sale_Price",
-            "Retail Price": "Retail_Price",
-            "Release Date": "Release_Date",
-            "Shoe Size": "Shoe_Size",
-            "Buyer Region": "Buyer"
+        # Train model
+        if not ml_pipeline.train_model(X_train, y_train):
+            return render(request, "users/ml.html", {"error": "Failed to train model"})
+        
+        # Evaluate model
+        metrics_result = ml_pipeline.evaluate(X_test, y_test)
+        
+        return render(request, "users/ml.html", {
+            "MAE": round(metrics_result['MAE'], 2),
+            "MSE": round(metrics_result['MSE'], 2),
+            "RMSE": round(metrics_result['RMSE'], 2),
+            "R2": round(metrics_result['R2'], 4)
         })
-        df['Order_date'] = pd.to_datetime(df['Order_date'])
-        df['Order_date'] = df['Order_date'].map(dt.datetime.toordinal)
-
-        df['Release_Date'] = pd.to_datetime(df['Release_Date'])
-        df['Release_Date'] = df['Release_Date'].map(dt.datetime.toordinal)
         
-        # Starting the linear regression
-        X = df.drop(['Sale_Price'], axis=1)
-        y = df.Sale_Price
-        
-        print(X.columns)
-        X_train, X_valid, y_train, y_valid = train_test_split(X, y, test_size=0.2)
-        object_cols = ['Sneaker_Name', 'Buyer', 'Brand']
-        
-        # Apply one-hot encoder to each column with categorical data
-        OH_encoder = OneHotEncoder(handle_unknown='ignore', sparse_output=False)
-        OH_cols_train = pd.DataFrame(OH_encoder.fit_transform(X_train[object_cols]))
-        OH_cols_valid = pd.DataFrame(OH_encoder.transform(X_valid[object_cols]))
-
-        # One-hot encoding removed index; put it back
-        OH_cols_train.index = X_train.index
-        OH_cols_valid.index = X_valid.index
-
-        # Adding the column names after one hot encoding
-        OH_cols_train.columns = OH_encoder.get_feature_names_out(object_cols)
-        OH_cols_valid.columns = OH_encoder.get_feature_names_out(object_cols)
-
-        # Remove categorical columns (will replace with one-hot encoding)
-        num_X_train = X_train.drop(object_cols, axis=1)
-        num_X_valid = X_valid.drop(object_cols, axis=1)
-
-        # Add one-hot encoded columns to numerical features
-        OH_X_train = pd.concat([num_X_train, OH_cols_train], axis=1)
-        OH_X_valid = pd.concat([num_X_valid, OH_cols_valid], axis=1)
-
-        lm = RandomForestRegressor()
-        lm.fit(OH_X_train, y_train)
-        predictions = lm.predict(OH_X_valid)
-        MAE = metrics.mean_absolute_error(y_valid, predictions)
-        MSE = metrics.mean_squared_error(y_valid, predictions)
-        RMSE = np.sqrt(metrics.mean_squared_error(y_valid, predictions))
-        
-        return render(request, "users/ml.html", {"MAE": MAE, "MSE": MSE, "RMSE": RMSE})
     except Exception as e:
         return render(request, "users/ml.html", {"error": str(e)})
 
+
 def prediction(request):
-    """Price prediction view - original implementation"""
+    """Price prediction view using centralized pipeline"""
     if request.method == "POST":
         try:
-            import pandas as pd
-            from django.conf import settings
-
-            Order_date = request.POST.get("Order_date")
-            Brand = request.POST.get("Brand")
-            Sneaker_Name = request.POST.get("Sneaker_Name")
-            Retail_Price = request.POST.get("Retail_Price")
-            Release_Date = request.POST.get("Release_Date")
-            Shoe_Size = request.POST.get("Shoe_Size")
-            Buyer = request.POST.get("Buyer")
-            print(Buyer)
-
-            path = settings.MEDIA_ROOT + "\\" + "Clean_Shoe_Data.csv"
-
-            shoe_data = pd.read_csv(path, parse_dates=True)
-            df = shoe_data.copy()
+            # Extract form data
+            form_data = {
+                'Order_date': request.POST.get("Order_date"),
+                'Brand': request.POST.get("Brand"),
+                'Sneaker_Name': request.POST.get("Sneaker_Name"),
+                'Retail_Price': float(request.POST.get("Retail_Price", 0)),
+                'Release_Date': request.POST.get("Release_Date"),
+                'Shoe_Size': float(request.POST.get("Shoe_Size", 0)),
+                'Buyer': request.POST.get("Buyer")
+            }
             
-            # Checking for missing values in the dataset
-            nulls = pd.concat([df.isnull().sum()], axis=1)
-            nulls[nulls.sum(axis=1) > 0]
+            # Create DataFrame for prediction
+            new_data = pd.DataFrame([form_data])
             
-            # Renaming columns to get rid of spaces 
-            df = df.rename(columns={
-                "Order Date": "Order_date",
-                "Sneaker Name": "Sneaker_Name",
-                "Sale Price": "Sale_Price",
-                "Retail Price": "Retail_Price",
-                "Release Date": "Release_Date",
-                "Shoe Size": "Shoe_Size",
-                "Buyer Region": "Buyer"
-            })
-            df['Order_date'] = pd.to_datetime(df['Order_date'])
-            df['Order_date'] = df['Order_date'].map(dt.datetime.toordinal)
-
-            df['Release_Date'] = pd.to_datetime(df['Release_Date'])
-            df['Release_Date'] = df['Release_Date'].map(dt.datetime.toordinal)
-            
-            # Starting the linear regression
-            X = df.drop(['Sale_Price'], axis=1)
-            y = df.Sale_Price
-            
-            print(X.columns)
-            X_train, X_valid, y_train, y_valid = train_test_split(X, y, test_size=0.2)
-            object_cols = ['Sneaker_Name', 'Buyer', 'Brand']
-            
-            # Apply one-hot encoder to each column with categorical data
-            OH_encoder = OneHotEncoder(handle_unknown='ignore', sparse_output=False)
-            OH_cols_train = pd.DataFrame(OH_encoder.fit_transform(X_train[object_cols]))
-            OH_cols_valid = pd.DataFrame(OH_encoder.transform(X_valid[object_cols]))
-
-            # One-hot encoding removed index; put it back
-            OH_cols_train.index = X_train.index
-            OH_cols_valid.index = X_valid.index
-
-            # Adding the column names after one hot encoding
-            OH_cols_train.columns = OH_encoder.get_feature_names_out(object_cols)
-            OH_cols_valid.columns = OH_encoder.get_feature_names_out(object_cols)
-
-            # Remove categorical columns (will replace with one-hot encoding)
-            num_X_train = X_train.drop(object_cols, axis=1)
-            num_X_valid = X_valid.drop(object_cols, axis=1)
-
-            # Add one-hot encoded columns to numerical features
-            OH_X_train = pd.concat([num_X_train, OH_cols_train], axis=1)
-            OH_X_valid = pd.concat([num_X_valid, OH_cols_valid], axis=1)
-
-            lm = RandomForestRegressor()
-            lm.fit(OH_X_train, y_train)
-            test_set = [Order_date, Brand, Sneaker_Name, Retail_Price, Release_Date, Shoe_Size, Buyer]
-            print('test_set', test_set)
-            new_data = pd.DataFrame({
-                'Order_date': [Order_date],
-                'Brand': [Brand],
-                'Sneaker_Name': [Sneaker_Name],
-                'Retail_Price': [Retail_Price],
-                'Release_Date': [Release_Date],
-                'Shoe_Size': [Shoe_Size],
-                'Buyer': [Buyer],
-            })
-
-            new_data['Order_date'] = pd.to_datetime(new_data['Order_date'])
+            # Convert dates to ordinal
+            new_data['Order_date'] = pd.to_datetime(new_data['Order_date'], errors='coerce')
             new_data['Order_date'] = new_data['Order_date'].map(dt.datetime.toordinal)
-
-            new_data['Release_Date'] = pd.to_datetime(new_data['Release_Date'])
+            
+            new_data['Release_Date'] = pd.to_datetime(new_data['Release_Date'], errors='coerce') 
             new_data['Release_Date'] = new_data['Release_Date'].map(dt.datetime.toordinal)
-            print('type:', new_data['Order_date'].dtype)
-
-            new_data_object_cols = new_data[object_cols]
-
-            # Apply one-hot encoding to the new input data using the already fitted encoder
-            OH_cols_new = pd.DataFrame(OH_encoder.transform(new_data_object_cols))
-
-            # Set appropriate column names for the one-hot encoded features
-            OH_cols_new.columns = OH_encoder.get_feature_names_out(object_cols)
-
-            # Drop the original categorical columns from the new input data
-            num_X_new = new_data.drop(object_cols, axis=1)
-
-            # Concatenate the numerical features with the one-hot encoded features for the new input data
-            OH_X_new = pd.concat([num_X_new, OH_cols_new], axis=1)
-
-            # Now, OH_X_new contains the transformed input data with one-hot encoded features
-            print(OH_X_new)
-            print(OH_cols_new.shape)
             
-            # Ensure columns match training data
-            missing_cols = set(OH_X_train.columns) - set(OH_X_new.columns)
-            for col in missing_cols:
-                OH_X_new[col] = 0
+            # Add dummy Sale_Price column for processing
+            new_data['Sale_Price'] = 0
             
-            # Reorder columns to match training data
-            OH_X_new = OH_X_new[OH_X_train.columns]
+            # Check if model is trained
+            if not ml_pipeline.is_fitted:
+                # Load data and train model first
+                df = ml_pipeline.load_and_preprocess_data(None)
+                if df is None:
+                    return render(request, 'users/prediction.html', {'error': 'Failed to load training data'})
+                
+                X, y = ml_pipeline.prepare_features(df, is_training=True)
+                if X is None:
+                    return render(request, 'users/prediction.html', {'error': 'Failed to prepare training features'})
+                
+                if not ml_pipeline.train_model(X, y):
+                    return render(request, 'users/prediction.html', {'error': 'Failed to train model'})
             
-            OH_X_new = OH_X_new.values
-            y_pred = lm.predict(OH_X_new)
-            print(y_pred)
-            return render(request, 'users/prediction.html', {'y_pred': y_pred})
+            # Prepare prediction features
+            X_pred, _ = ml_pipeline.prepare_features(new_data, is_training=False)
+            if X_pred is None:
+                return render(request, 'users/prediction.html', {'error': 'Failed to prepare prediction features'})
+            
+            # Make prediction
+            prediction_result = ml_pipeline.predict(X_pred)
+            predicted_price = round(float(prediction_result[0]), 2)
+            
+            return render(request, 'users/prediction.html', {
+                'y_pred': [predicted_price],
+                'input_data': form_data
+            })
             
         except Exception as e:
             return render(request, 'users/prediction.html', {'error': str(e)})
-
+    
     return render(request, 'users/prediction.html')
+
 
 # Advanced model endpoints (only available if models are imported)
 if ADVANCED_MODELS_AVAILABLE:
@@ -456,6 +507,7 @@ else:
             'error': 'Advanced prediction API not available. Use the web form instead.'
         })
 
+
 def generate_comparison_chart(request):
     """Generate model comparison chart"""
     try:
@@ -493,6 +545,7 @@ def generate_comparison_chart(request):
             'success': False,
             'error': str(e)
         })
+
 
 def model_details(request, model_name):
     """Get detailed information about a specific model"""
@@ -540,6 +593,7 @@ def model_details(request, model_name):
             'error': str(e)
         })
 
+
 @csrf_exempt
 @require_http_methods(["POST"])
 def upload_dataset(request):
@@ -574,9 +628,10 @@ def upload_dataset(request):
             })
         
         # Save file
-        import os
-        os.makedirs('media', exist_ok=True)
-        file_path = f'media/uploaded_{uploaded_file.name}'
+        media_dir = Path(settings.MEDIA_ROOT)
+        media_dir.mkdir(exist_ok=True)
+        file_path = media_dir / f'uploaded_{uploaded_file.name}'
+        
         with open(file_path, 'wb+') as destination:
             for chunk in uploaded_file.chunks():
                 destination.write(chunk)
@@ -589,7 +644,7 @@ def upload_dataset(request):
                 'rows': len(df),
                 'columns': len(df.columns),
                 'column_names': list(df.columns),
-                'file_path': file_path
+                'file_path': str(file_path)
             }
         })
         
@@ -598,6 +653,7 @@ def upload_dataset(request):
             'success': False,
             'error': str(e)
         })
+
 
 def api_status(request):
     """API status endpoint"""
@@ -636,12 +692,13 @@ def api_status(request):
             'error': str(e)
         })
 
+
 # Error handler views
 def handler404(request, exception):
     """Custom 404 page"""
     return render(request, 'sneaker_prediction/404.html', status=404)
 
+
 def handler500(request):
     """Custom 500 page"""
     return render(request, 'sneaker_prediction/500.html', status=500)
-    
