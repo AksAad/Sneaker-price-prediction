@@ -56,11 +56,14 @@ class MLPipelineManager:
         self.feature_names = None
         self.is_fitted = False
     
-    def load_and_preprocess_data(self, file_path):
+    def load_and_preprocess_data(self, file_path=None):
         """Load and preprocess the sneaker data"""
         try:
             # Use pathlib for cross-platform path handling
-            path = Path(settings.MEDIA_ROOT) / "Clean_Shoe_Data.csv"
+            if file_path:
+                path = Path(file_path)
+            else:
+                path = Path(settings.MEDIA_ROOT) / "Clean_Shoe_Data.csv"
             
             if not path.exists():
                 raise FileNotFoundError(f"Dataset not found at {path}")
@@ -235,6 +238,145 @@ def UserHome(request):
     return render(request, 'users/UserHomePage.html', {})
 
 
+def DatasetView(request):
+    """View dataset with error handling - RESOLVED VERSION"""
+    try:
+        path = Path(settings.MEDIA_ROOT) / "Clean_Shoe_Data.csv"
+        df = pd.read_csv(path, nrows=100)
+        df_html = df.to_html(classes='table table-striped', table_id='dataset-table')
+        return render(request, 'users/viewdataset.html', {'data': df_html})
+    except Exception as e:
+        error_msg = f'Error loading data: {str(e)}'
+        return render(request, 'users/viewdataset.html', {'data': error_msg})
+
+
+def machinelearning(request):
+    """Machine learning analysis - RESOLVED VERSION using centralized pipeline"""
+    try:
+        # Load and preprocess data using centralized pipeline
+        df = ml_pipeline.load_and_preprocess_data()
+        if df is None:
+            return render(request, "users/ml.html", {"error": "Failed to load dataset"})
+        
+        # Prepare features using centralized pipeline
+        X, y = ml_pipeline.prepare_features(df, is_training=True)
+        if X is None:
+            return render(request, "users/ml.html", {"error": "Failed to prepare features"})
+        
+        # Split data
+        X_train, X_valid, y_train, y_valid = train_test_split(X, y, test_size=0.2, random_state=42)
+        
+        # Train model using centralized pipeline
+        if not ml_pipeline.train_model(X_train, y_train):
+            return render(request, "users/ml.html", {"error": "Failed to train model"})
+        
+        # Evaluate model using centralized pipeline
+        metrics_result = ml_pipeline.evaluate(X_valid, y_valid)
+        
+        return render(request, "users/ml.html", {
+            "MAE": round(metrics_result['MAE'], 2),
+            "MSE": round(metrics_result['MSE'], 2), 
+            "RMSE": round(metrics_result['RMSE'], 2),
+            "R2": round(metrics_result['R2'], 4)
+        })
+        
+    except Exception as e:
+        return render(request, "users/ml.html", {"error": str(e)})
+
+
+def prediction(request):
+    """Price prediction view - RESOLVED VERSION using centralized pipeline"""
+    if request.method == "POST":
+        try:
+            # Extract form data
+            Order_date = request.POST.get("Order_date")
+            Brand = request.POST.get("Brand")
+            Sneaker_Name = request.POST.get("Sneaker_Name")
+            Retail_Price = request.POST.get("Retail_Price")
+            Release_Date = request.POST.get("Release_Date")
+            Shoe_Size = request.POST.get("Shoe_Size")
+            Buyer = request.POST.get("Buyer")
+            
+            print(f"Received prediction request for: {Sneaker_Name}, Brand: {Brand}, Buyer: {Buyer}")
+            
+            # Validate and convert numeric fields
+            try:
+                Retail_Price = float(Retail_Price) if Retail_Price else 0.0
+                Shoe_Size = float(Shoe_Size) if Shoe_Size else 0.0
+            except ValueError:
+                return render(request, 'users/prediction.html', {
+                    'error': 'Invalid numeric values for Retail Price or Shoe Size'
+                })
+            
+            # Create DataFrame for prediction
+            new_data = pd.DataFrame({
+                'Order_date': [Order_date],
+                'Brand': [Brand],
+                'Sneaker_Name': [Sneaker_Name],
+                'Retail_Price': [Retail_Price],
+                'Release_Date': [Release_Date],
+                'Shoe_Size': [Shoe_Size],
+                'Buyer': [Buyer]
+            })
+            
+            # Convert dates to ordinal
+            new_data['Order_date'] = pd.to_datetime(new_data['Order_date'], errors='coerce')
+            new_data['Order_date'] = new_data['Order_date'].map(dt.datetime.toordinal)
+            
+            new_data['Release_Date'] = pd.to_datetime(new_data['Release_Date'], errors='coerce')
+            new_data['Release_Date'] = new_data['Release_Date'].map(dt.datetime.toordinal)
+            
+            # Add dummy Sale_Price column for processing
+            new_data['Sale_Price'] = 0
+            
+            # Check if model is trained, if not train it
+            if not ml_pipeline.is_fitted:
+                print("Model not fitted, training now...")
+                df = ml_pipeline.load_and_preprocess_data()
+                if df is None:
+                    return render(request, 'users/prediction.html', {'error': 'Failed to load training data'})
+                
+                X, y = ml_pipeline.prepare_features(df, is_training=True)
+                if X is None:
+                    return render(request, 'users/prediction.html', {'error': 'Failed to prepare training features'})
+                
+                X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+                if not ml_pipeline.train_model(X_train, y_train):
+                    return render(request, 'users/prediction.html', {'error': 'Failed to train model'})
+            
+            # Prepare prediction features
+            X_pred, _ = ml_pipeline.prepare_features(new_data, is_training=False)
+            if X_pred is None:
+                return render(request, 'users/prediction.html', {'error': 'Failed to prepare prediction features'})
+            
+            # Make prediction
+            prediction_result = ml_pipeline.predict(X_pred)
+            predicted_price = round(float(prediction_result[0]), 2)
+            
+            # Prepare input data for display
+            input_data = {
+                'Order_date': Order_date,
+                'Brand': Brand,
+                'Sneaker_Name': Sneaker_Name,
+                'Retail_Price': Retail_Price,
+                'Release_Date': Release_Date,
+                'Shoe_Size': Shoe_Size,
+                'Buyer': Buyer
+            }
+            
+            return render(request, 'users/prediction.html', {
+                'y_pred': [predicted_price],
+                'input_data': input_data,
+                'success': True
+            })
+            
+        except Exception as e:
+            print(f"Prediction error: {str(e)}")
+            return render(request, 'users/prediction.html', {'error': str(e)})
+    
+    return render(request, 'users/prediction.html')
+
+
 def home(request):
     """Home page view"""
     context = {
@@ -252,114 +394,6 @@ def model_comparison(request):
         'models': ['Linear Regression', 'Random Forest', 'XGBoost', 'SVR'] if ADVANCED_MODELS_AVAILABLE else ['Random Forest']
     }
     return render(request, 'sneaker_prediction/model_comparison.html', context)
-
-
-def DatasetView(request):
-    """View dataset with error handling"""
-    try:
-        path = Path(settings.MEDIA_ROOT) / "Clean_Shoe_Data.csv"
-        df = pd.read_csv(path, nrows=100)
-        df_html = df.to_html(classes='table table-striped', table_id='dataset-table')
-        return render(request, 'users/viewdataset.html', {'data': df_html})
-    except Exception as e:
-        error_msg = f'Error loading data: {str(e)}'
-        return render(request, 'users/viewdataset.html', {'data': error_msg})
-
-
-def machinelearning(request):
-    """Machine learning analysis using centralized pipeline"""
-    try:
-        # Load and preprocess data
-        df = ml_pipeline.load_and_preprocess_data(None)
-        if df is None:
-            return render(request, "users/ml.html", {"error": "Failed to load dataset"})
-        
-        # Prepare features
-        X, y = ml_pipeline.prepare_features(df, is_training=True)
-        if X is None:
-            return render(request, "users/ml.html", {"error": "Failed to prepare features"})
-        
-        # Split data
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-        
-        # Train model
-        if not ml_pipeline.train_model(X_train, y_train):
-            return render(request, "users/ml.html", {"error": "Failed to train model"})
-        
-        # Evaluate model
-        metrics_result = ml_pipeline.evaluate(X_test, y_test)
-        
-        return render(request, "users/ml.html", {
-            "MAE": round(metrics_result['MAE'], 2),
-            "MSE": round(metrics_result['MSE'], 2),
-            "RMSE": round(metrics_result['RMSE'], 2),
-            "R2": round(metrics_result['R2'], 4)
-        })
-        
-    except Exception as e:
-        return render(request, "users/ml.html", {"error": str(e)})
-
-
-def prediction(request):
-    """Price prediction view using centralized pipeline"""
-    if request.method == "POST":
-        try:
-            # Extract form data
-            form_data = {
-                'Order_date': request.POST.get("Order_date"),
-                'Brand': request.POST.get("Brand"),
-                'Sneaker_Name': request.POST.get("Sneaker_Name"),
-                'Retail_Price': float(request.POST.get("Retail_Price", 0)),
-                'Release_Date': request.POST.get("Release_Date"),
-                'Shoe_Size': float(request.POST.get("Shoe_Size", 0)),
-                'Buyer': request.POST.get("Buyer")
-            }
-            
-            # Create DataFrame for prediction
-            new_data = pd.DataFrame([form_data])
-            
-            # Convert dates to ordinal
-            new_data['Order_date'] = pd.to_datetime(new_data['Order_date'], errors='coerce')
-            new_data['Order_date'] = new_data['Order_date'].map(dt.datetime.toordinal)
-            
-            new_data['Release_Date'] = pd.to_datetime(new_data['Release_Date'], errors='coerce') 
-            new_data['Release_Date'] = new_data['Release_Date'].map(dt.datetime.toordinal)
-            
-            # Add dummy Sale_Price column for processing
-            new_data['Sale_Price'] = 0
-            
-            # Check if model is trained
-            if not ml_pipeline.is_fitted:
-                # Load data and train model first
-                df = ml_pipeline.load_and_preprocess_data(None)
-                if df is None:
-                    return render(request, 'users/prediction.html', {'error': 'Failed to load training data'})
-                
-                X, y = ml_pipeline.prepare_features(df, is_training=True)
-                if X is None:
-                    return render(request, 'users/prediction.html', {'error': 'Failed to prepare training features'})
-                
-                if not ml_pipeline.train_model(X, y):
-                    return render(request, 'users/prediction.html', {'error': 'Failed to train model'})
-            
-            # Prepare prediction features
-            X_pred, _ = ml_pipeline.prepare_features(new_data, is_training=False)
-            if X_pred is None:
-                return render(request, 'users/prediction.html', {'error': 'Failed to prepare prediction features'})
-            
-            # Make prediction
-            prediction_result = ml_pipeline.predict(X_pred)
-            predicted_price = round(float(prediction_result[0]), 2)
-            
-            return render(request, 'users/prediction.html', {
-                'y_pred': [predicted_price],
-                'input_data': form_data
-            })
-            
-        except Exception as e:
-            return render(request, 'users/prediction.html', {'error': str(e)})
-    
-    return render(request, 'users/prediction.html')
 
 
 # Advanced model endpoints (only available if models are imported)
