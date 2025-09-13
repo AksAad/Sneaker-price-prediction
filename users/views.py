@@ -115,35 +115,6 @@ def DatasetView(request):
     except Exception as e:
         return render(request, 'users/viewdataset.html', {'data': f'Error loading data: {str(e)}'})
 
-def prepare_sneaker_data(path):
-    """Common function to prepare sneaker data"""
-    shoe_data = pd.read_csv(path, parse_dates=True)
-    df = shoe_data.copy()
-    
-    # Checking for missing values in the dataset
-    nulls = pd.concat([df.isnull().sum()], axis=1)
-    nulls[nulls.sum(axis=1) > 0]
-    
-    # Renaming columns to get rid of spaces 
-    df = df.rename(columns={
-        "Order Date": "Order_date",
-        "Sneaker Name": "Sneaker_Name",
-        "Sale Price": "Sale_Price",
-        "Retail Price": "Retail_Price",
-        "Release Date": "Release_Date",
-        "Shoe Size": "Shoe_Size",
-        "Buyer Region": "Buyer"
-    })
-    
-    # Convert dates to ordinal
-    df['Order_date'] = pd.to_datetime(df['Order_date'])
-    df['Order_date'] = df['Order_date'].map(dt.datetime.toordinal)
-    
-    df['Release_Date'] = pd.to_datetime(df['Release_Date'])
-    df['Release_Date'] = df['Release_Date'].map(dt.datetime.toordinal)
-    
-    return df
-
 def machinelearning(request):
     """Machine learning analysis - original implementation"""
     try:
@@ -152,7 +123,7 @@ def machinelearning(request):
         
         shoe_data = pd.read_csv(path, parse_dates=True)
         df = shoe_data.copy()
-        df
+        
         # Checking for missing values in the dataset
         nulls = pd.concat([df.isnull().sum()], axis=1)
         nulls[nulls.sum(axis=1) > 0]
@@ -172,14 +143,15 @@ def machinelearning(request):
 
         df['Release_Date'] = pd.to_datetime(df['Release_Date'])
         df['Release_Date'] = df['Release_Date'].map(dt.datetime.toordinal)
+        
         # Starting the linear regression
-
         X = df.drop(['Sale_Price'], axis=1)
         y = df.Sale_Price
-        #X = X.columns.astype(str)
+        
         print(X.columns)
         X_train, X_valid, y_train, y_valid = train_test_split(X, y, test_size=0.2)
         object_cols = ['Sneaker_Name', 'Buyer', 'Brand']
+        
         # Apply one-hot encoder to each column with categorical data
         OH_encoder = OneHotEncoder(handle_unknown='ignore', sparse_output=False)
         OH_cols_train = pd.DataFrame(OH_encoder.fit_transform(X_train[object_cols]))
@@ -232,7 +204,7 @@ def prediction(request):
 
             shoe_data = pd.read_csv(path, parse_dates=True)
             df = shoe_data.copy()
-            df
+            
             # Checking for missing values in the dataset
             nulls = pd.concat([df.isnull().sum()], axis=1)
             nulls[nulls.sum(axis=1) > 0]
@@ -252,14 +224,15 @@ def prediction(request):
 
             df['Release_Date'] = pd.to_datetime(df['Release_Date'])
             df['Release_Date'] = df['Release_Date'].map(dt.datetime.toordinal)
+            
             # Starting the linear regression
-
             X = df.drop(['Sale_Price'], axis=1)
             y = df.Sale_Price
-            #X = X.columns.astype(str)
+            
             print(X.columns)
             X_train, X_valid, y_train, y_valid = train_test_split(X, y, test_size=0.2)
             object_cols = ['Sneaker_Name', 'Buyer', 'Brand']
+            
             # Apply one-hot encoder to each column with categorical data
             OH_encoder = OneHotEncoder(handle_unknown='ignore', sparse_output=False)
             OH_cols_train = pd.DataFrame(OH_encoder.fit_transform(X_train[object_cols]))
@@ -671,6 +644,4 @@ def handler404(request, exception):
 def handler500(request):
     """Custom 500 page"""
     return render(request, 'sneaker_prediction/500.html', status=500)
-
-
     
